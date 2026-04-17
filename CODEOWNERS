@@ -1,0 +1,8 @@
+# Default: the auto-research core maintainers review everything.
+*                                      @Frosselet
+
+# Infrastructure is owned by the enablement team once it exists.
+# Replace @enablement-team with the actual GitHub team slug after account setup.
+/infra/                                @Frosselet @enablement-team
+/infra/terraform/                      @Frosselet @enablement-team
+/infra/docker/                         @Frosselet @enablement-team

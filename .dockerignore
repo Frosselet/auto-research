@@ -1,0 +1,19 @@
+# Keep the Docker build context small — we only need packages/ and infra/docker/.
+.venv/
+.git/
+.github/
+.pytest_cache/
+.vscode/
+.claude/
+.auto-research/
+__pycache__/
+*.pyc
+*.pyo
+tests/
+examples/
+docs/
+infra/terraform/
+uv.lock
+README.md
+*.md
+.python-version

@@ -1,8 +1,9 @@
 # auto-research
 
 **Enterprise productization of Karpathy's autoresearch pattern for quant analysts** —
-a pip-installable Python package that runs an LLM-driven research loop on your laptop today,
-and (roadmap) on a managed AWS backend tomorrow, without changing your notebook code.
+a pip-installable Python package that runs an LLM-driven research loop on your laptop
+(MVP-1) or on a parallel Step Functions + Lambda backend (MVP-2), without changing your
+`train.py` / `eval.py` / `spec.yaml`.
 
 ---
 
@@ -50,33 +51,44 @@ training script, and are happy reading raw logs. This repo wraps the same loop i
 
 The codebase ships in two stages with a deliberately identical surface area:
 
-| Axis | **MVP-1 — local** *(this milestone)* | **MVP-2 — cloud** *(roadmap)* |
+| Axis | **MVP-1 — local** | **MVP-2 — cloud** |
 | --- | --- | --- |
 | **Where it runs** | Your laptop, in-process from a notebook | Step Functions + Lambda on AWS |
 | **Storage** | `.auto-research/ledger.jsonl` on disk | S3 + DynamoDB |
 | **Secrets** | `OPENAI_API_KEY` from the shell | AWS Secrets Manager |
-| **Deployment** | `uv sync` | Terraform, by the enablement team |
-| **Notebook call** | `auto_research.run_local("./spec.yaml")` | `auto_research.submit("./spec.yaml")` |
-| **Status** | Working, validated end-to-end via the walkthrough notebook | Not yet implemented |
+| **Deployment** | `uv sync` | Terraform, by the enablement team (see [`infra/DEPLOY.md`](infra/DEPLOY.md)) |
+| **Notebook call** | `auto_research.run_local("./spec.yaml")` | `auto_research.submit("./spec.yaml", ...)` |
+| **Trial execution** | Sequential on your laptop | **Parallel** fan-out via Step Functions Map (K trials per round) |
+| **Status** | Working, validated end-to-end | Working, unit-tested with `moto`; enablement team deploys per team |
 
-The critical design rule: **exactly one line of notebook code differs between the two.**
-Same package, same `spec.yaml`, same `train.py` / `eval.py`, same ledger shape. The cloud
-flavour swaps the `Runner` / `Store` / `Secrets` implementations behind the seams; nothing in
-`loop.py` or `states/*.py` imports `boto3`.
+Two things to know about MVP-2:
 
-For a quant: MVP-2 means your laptop is free to do other things, the loop runs on the
-enablement team's AWS account (so FinOps is per-team), and the loop can run on a daily schedule
-without your laptop being awake. For a developer: the work left for MVP-2 is wiring AWS
-infrastructure, not rewriting the loop.
+- **Decentralization.** Every quant gets the same frozen execution environment (one
+  Lambda container image, scipy + sklearn + pandas baked in). No "works on my Mac,
+  fails on Pierre's PC."
+- **Parallelism.** `spec.parallelism: K` fans out K trials per round via a Step
+  Functions Map state. A 100-trial study drops from hours to minutes. K=1 reproduces
+  the original Karpathy loop exactly (a golden test guards this); K>1 is a batched
+  hill-climb. Same ledger, same `train.py` / `eval.py` — see
+  [`docs/parallelism.md`](docs/parallelism.md) for the full explanation.
+
+The design rule: **same `spec.yaml`, same `train.py` / `eval.py`, same ledger shape.**
+The cloud flavour swaps `Runner` / `Store` / `Secrets` implementations behind the seams;
+nothing in `loop.py` or `states/*.py` imports `boto3`.
 
 ---
 
-## Install (MVP-1)
+## Install
 
 Python 3.12 is the baseline (matches the office environment).
 
 ```bash
+# MVP-1 (local only):
 uv sync --extra examples --extra dev
+
+# MVP-1 + MVP-2 (adds boto3 for submit() to AWS):
+uv sync --extra examples --extra dev --extra aws
+
 uv run python -m ipykernel install --user --name auto-research --display-name "auto-research (Python 3.12)"
 ```
 
@@ -98,6 +110,30 @@ auto_research.run_local("./spec.yaml")
 print(auto_research.results("./spec.yaml"))
 ```
 
+### Running on AWS (MVP-2)
+
+After your enablement team has run [`infra/DEPLOY.md`](infra/DEPLOY.md) and handed
+you four ARNs/names, the notebook code is one call:
+
+```python
+import auto_research
+
+handle = auto_research.submit(
+    "./spec.yaml",
+    state_machine_arn="arn:aws:states:eu-west-1:...:stateMachine:auto-research-<team>-dev-loop",
+    s3_bucket="auto-research-<team>-dev",
+    ddb_table="auto-research-<team>-dev-ledger",
+    openai_secret_id="auto-research-<team>-dev/openai",
+    region="eu-west-1",
+)
+for snap in auto_research.watch(handle):
+    print(snap)          # live progress: trials, kept, usd_spent, best_metric
+print(auto_research.aws_results(handle))   # full ledger from DynamoDB
+```
+
+Same `spec.yaml`, same `train.py` / `eval.py` as local — the only change is the
+call site.
+
 ## Reference recipe
 
 `examples/gbdt-ohlcv/` — a gradient-boosted direction classifier
@@ -110,22 +146,29 @@ export OPENAI_API_KEY=sk-...
 uv run python -c "import auto_research; auto_research.run_local('examples/gbdt-ohlcv/spec.yaml')"
 ```
 
-## End-to-end walkthrough
+## End-to-end walkthroughs
 
-`examples/walkthrough.ipynb` runs the full loop on synthetic OHLCV from a Jupyter notebook,
-end to end, against an OpenAI key. Expect ~30 seconds of OpenAI calls + ~15 seconds of local
-CPU training. Total cost: about a fifth of a cent at `gpt-4o-mini` rates. The notebook is
-written for two audiences side-by-side — quants who know the theory but not the implementation,
-and developers who know the implementation but not the theory.
+- [`examples/walkthrough.ipynb`](examples/walkthrough.ipynb) — **local (MVP-1).** Full
+  Karpathy loop on synthetic OHLCV from a Jupyter notebook, end to end, against an
+  OpenAI key. ~30 seconds of LLM calls + ~15 seconds of local CPU training, about a
+  fifth of a cent at `gpt-4o-mini` rates. Written side-by-side for quants (who know the
+  theory) and developers (who know the implementation).
+- [`examples/walkthrough_aws.ipynb`](examples/walkthrough_aws.ipynb) — **AWS (MVP-2).**
+  Same recipe, this time `submit()`ted to Step Functions with `parallelism=4`. Two
+  rounds of four parallel trials, ledger in DynamoDB, artifacts in S3. Assumes the
+  enablement team has already run [`infra/DEPLOY.md`](infra/DEPLOY.md).
 
-## Public API (MVP-1)
+## Public API
 
 | Symbol | Purpose |
 | --- | --- |
 | `auto_research.onboard()` | Interactive interview that emits `spec.yaml` + `train.py` + `eval.py` |
 | `auto_research.run_local(spec)` | Execute the Karpathy loop locally against an OpenAI key |
-| `auto_research.results(spec)` | Read the ledger, return the best trial and full history |
-| `auto_research.Spec` | Pydantic model for `spec.yaml` (validated paths, budgets, metric) |
+| `auto_research.results(spec)` | Read the local ledger; return the best trial and full history |
+| `auto_research.submit(spec, ...)` | (AWS) upload inputs to S3, start a Step Functions execution, return a `Handle` |
+| `auto_research.aws_results(handle)` | (AWS) read the DynamoDB ledger for a submitted run |
+| `auto_research.watch(handle)` | (AWS) generator yielding progress snapshots until the execution ends |
+| `auto_research.Spec` | Pydantic model for `spec.yaml` (validated paths, budgets, metric, parallelism) |
 | `auto_research.Trial`, `LoopState` | Types for trial records and loop state |
 
 ## The ledger and the FinOps KPI
