@@ -1,0 +1,35 @@
+"""eval.py scaffold — written by auto_research.onboard().
+
+Contract:
+  - Reads data from env var AUTORESEARCH_DATA_PATH.
+  - Reads artifact from env var AUTORESEARCH_ARTIFACT_DIR.
+  - Writes {"metric": <float>} to AUTORESEARCH_ARTIFACT_DIR/metric.json.
+
+This file is NOT edited by the loop — it is the stable evaluation target.
+"""
+from __future__ import annotations
+
+import json
+import os
+import pickle
+from pathlib import Path
+
+import pandas as pd
+
+
+def main() -> None:
+    data_path = Path(os.environ["AUTORESEARCH_DATA_PATH"])
+    artifact_dir = Path(os.environ["AUTORESEARCH_ARTIFACT_DIR"])
+
+    df = pd.read_csv(data_path)
+    with (artifact_dir / "model.pkl").open("rb") as f:
+        model = pickle.load(f)
+
+    # TODO: replace with your actual metric computation.
+    metric = -abs(float(df.select_dtypes("number").mean().mean()) - model["mean"])
+
+    (artifact_dir / "metric.json").write_text(json.dumps({"metric": metric}))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,34 @@
+"""train.py scaffold — written by auto_research.onboard().
+
+Contract:
+  - Reads training data from env var AUTORESEARCH_DATA_PATH.
+  - Writes its model artifact into env var AUTORESEARCH_ARTIFACT_DIR.
+  - Exits 0 on success, non-zero on failure.
+
+The autoresearch loop will propose edits to THIS file. Keep it self-contained.
+"""
+from __future__ import annotations
+
+import os
+import pickle
+from pathlib import Path
+
+import pandas as pd
+
+
+def main() -> None:
+    data_path = Path(os.environ["AUTORESEARCH_DATA_PATH"])
+    artifact_dir = Path(os.environ["AUTORESEARCH_ARTIFACT_DIR"])
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_csv(data_path)
+
+    # TODO: replace with your actual training logic. The proposer will edit this.
+    model = {"mean": float(df.select_dtypes("number").mean().mean())}
+
+    with (artifact_dir / "model.pkl").open("wb") as f:
+        pickle.dump(model, f)
+
+
+if __name__ == "__main__":
+    main()

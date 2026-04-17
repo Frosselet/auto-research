@@ -1,0 +1,11 @@
+objective: Maximize out-of-sample daily Sharpe of a next-day direction classifier on synthetic OHLCV.
+data_path: data.csv
+train_script: train.py
+eval_script: eval.py
+metric:
+  name: sharpe
+  direction: maximize
+daily_budget_usd: 0.25
+max_iterations: 8
+openai_model: gpt-4o-mini
+workdir: .auto-research
