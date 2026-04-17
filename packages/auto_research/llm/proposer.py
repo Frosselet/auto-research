@@ -33,3 +33,33 @@ class Proposer(ABC):
         best_metric: float | None,
         metric_direction: str,
     ) -> Proposal: ...
+
+    def propose_batch(
+        self,
+        *,
+        k: int,
+        objective: str,
+        current_source: str,
+        history: list[Trial],
+        best_metric: float | None,
+        metric_direction: str,
+    ) -> list[Proposal]:
+        """Propose K diverse candidate edits to train.py for one round.
+
+        Default implementation calls propose() k times sequentially — works for any
+        Proposer but issues K separate LLM calls. Subclasses (e.g. OpenAIProposer)
+        should override with a single LLM call returning K proposals to halve cost
+        and naturally avoid duplicate proposals.
+        """
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
+        return [
+            self.propose(
+                objective=objective,
+                current_source=current_source,
+                history=history,
+                best_metric=best_metric,
+                metric_direction=metric_direction,
+            )
+            for _ in range(k)
+        ]

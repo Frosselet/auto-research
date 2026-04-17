@@ -18,8 +18,28 @@ class Spec(BaseModel):
     train_script: str = Field(default="train.py")
     eval_script: str = Field(default="eval.py")
     metric: Metric
-    daily_budget_usd: float = Field(gt=0, description="Hard stop for LLM + compute spend per run.")
-    max_iterations: int = Field(default=50, gt=0)
+    daily_budget_usd: float = Field(
+        gt=0,
+        description=(
+            "Hard stop for LLM + compute spend per run. Checked at round boundaries; "
+            "when parallelism > 1, K proposals are charged together up front and the round "
+            "may overshoot mid-flight."
+        ),
+    )
+    max_iterations: int = Field(
+        default=50,
+        gt=0,
+        description="Total trial cap (not round cap). With parallelism=K, runs ~ ceil(max_iterations/K) rounds.",
+    )
+    parallelism: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Trials proposed per round. parallelism=1 reproduces the original sequential "
+            "Karpathy loop exactly. parallelism>1 batches K proposals per round; in MVP-1 they "
+            "run sequentially, in MVP-2 (AWS) they run in parallel via Step Functions Map."
+        ),
+    )
     openai_model: str = Field(default="gpt-4o-mini")
     workdir: str = Field(
         default=".auto-research",

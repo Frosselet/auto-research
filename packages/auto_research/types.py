@@ -12,6 +12,15 @@ class Trial(BaseModel):
     parent_id: str | None = Field(
         default=None, description="trial_id of the best-so-far this trial was proposed against."
     )
+    round_id: str | None = Field(
+        default=None,
+        description="Identifier of the round this trial was proposed in. Sibling trials in the "
+        "same cohort share a round_id. None for legacy ledger entries.",
+    )
+    cohort_size: int = Field(
+        default=1,
+        description="Number of sibling trials proposed in this round. 1 = sequential Karpathy loop.",
+    )
     diff: str = ""
     metric: float | None = None
     best_metric_before: float | None = None
@@ -40,7 +49,10 @@ class LoopState(BaseModel):
     best_source: str = ""
     history: list[Trial] = Field(default_factory=list)
     usd_spent: float = 0.0
-    iteration: int = 0
+    iteration: int = Field(
+        default=0, description="Total trials run (kept or not). Equals sum of cohort sizes across rounds."
+    )
+    round: int = Field(default=0, description="Number of completed rounds. Equals iteration when parallelism=1.")
 
     def remaining_budget(self, daily_budget_usd: float) -> float:
         return max(0.0, daily_budget_usd - self.usd_spent)

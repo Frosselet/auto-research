@@ -42,6 +42,30 @@ write its artifact into sys.argv[2], and not touch anything else.
 """
 
 
+_SYSTEM_BATCH = """You are an autoresearch proposer for a quantitative-research training script.
+
+Your job: propose K DIVERSE small, targeted edits to train.py that are each likely to improve
+the primary metric. Each edit must be independent and meaningfully different from the others
+(different hyperparameters, different features, different regularization strategies, etc.) —
+do NOT return K near-identical variants of the same idea. Bias toward changes with known-good
+signal-to-noise.
+
+You MUST return a JSON object with exactly this shape:
+  {
+    "proposals": [
+      {"summary": "...", "new_source": "...full train.py..."},
+      {"summary": "...", "new_source": "...full train.py..."},
+      ...
+    ]
+  }
+
+The "proposals" list MUST have exactly K entries. Each "new_source" MUST be the FULL new
+train.py source code, not a diff. Never invent imports that aren't already present unless
+the stdlib provides them. Keep each train.py self-contained: it must read data from the path
+passed as sys.argv[1], write its artifact into sys.argv[2], and not touch anything else.
+"""
+
+
 def _format_history(history: list[Trial], limit: int = 10) -> str:
     if not history:
         return "(no prior trials)"
@@ -115,3 +139,141 @@ class OpenAIProposer(Proposer):
             tokens_out=tokens_out,
             usd=usd,
         )
+
+    def propose_batch(
+        self,
+        *,
+        k: int,
+        objective: str,
+        current_source: str,
+        history: list[Trial],
+        best_metric: float | None,
+        metric_direction: str,
+    ) -> list[Proposal]:
+        """One LLM call returns K diverse proposals; usage cost is split evenly across them.
+
+        On finish_reason == "length" the response was truncated; we halve K and retry once
+        rather than risk parsing partial JSON. If the retry also truncates we raise.
+        """
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
+        if k == 1:
+            return [
+                self.propose(
+                    objective=objective,
+                    current_source=current_source,
+                    history=history,
+                    best_metric=best_metric,
+                    metric_direction=metric_direction,
+                )
+            ]
+
+        attempted_k = k
+        proposals = self._call_batch(
+            k=attempted_k,
+            objective=objective,
+            current_source=current_source,
+            history=history,
+            best_metric=best_metric,
+            metric_direction=metric_direction,
+        )
+        if proposals is None:
+            attempted_k = max(1, k // 2)
+            proposals = self._call_batch(
+                k=attempted_k,
+                objective=objective,
+                current_source=current_source,
+                history=history,
+                best_metric=best_metric,
+                metric_direction=metric_direction,
+            )
+        if proposals is None:
+            raise RuntimeError(
+                f"OpenAI response truncated for k={k} and again for k={attempted_k}; "
+                "lower spec.parallelism or shorten train.py"
+            )
+        return proposals
+
+    def _call_batch(
+        self,
+        *,
+        k: int,
+        objective: str,
+        current_source: str,
+        history: list[Trial],
+        best_metric: float | None,
+        metric_direction: str,
+    ) -> list[Proposal] | None:
+        user = (
+            f"Objective: {objective}\n"
+            f"Metric direction: {metric_direction}\n"
+            f"Current best metric: {best_metric if best_metric is not None else 'none yet'}\n\n"
+            f"K (number of diverse proposals to return): {k}\n\n"
+            f"Recent trials:\n{_format_history(history)}\n\n"
+            f"Current train.py:\n```python\n{current_source}\n```\n\n"
+            "Return the JSON object as specified."
+        )
+
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _SYSTEM_BATCH},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.9,
+        )
+
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            return None
+
+        content = choice.message.content or "{}"
+        payload = json.loads(content)
+        raw = payload.get("proposals", [])
+        if not isinstance(raw, list) or len(raw) == 0:
+            raise RuntimeError("proposer returned no proposals")
+        # Tolerate fewer than k if the model couldn't produce K diverse edits, but never zero.
+        usable = []
+        for entry in raw[:k]:
+            new_source = (entry.get("new_source") or "").strip()
+            if not new_source:
+                continue
+            usable.append((entry, new_source))
+        if not usable:
+            raise RuntimeError("proposer returned only empty new_source entries")
+
+        usage = resp.usage
+        tokens_in_total = usage.prompt_tokens if usage else 0
+        tokens_out_total = usage.completion_tokens if usage else 0
+        rates = _RATES.get(self._model, _DEFAULT_RATES)
+        usd_total = (
+            tokens_in_total * rates.usd_per_1k_input / 1000
+            + tokens_out_total * rates.usd_per_1k_output / 1000
+        )
+        n = len(usable)
+        per_in = tokens_in_total // n
+        per_out = tokens_out_total // n
+        per_usd = usd_total / n
+
+        proposals: list[Proposal] = []
+        for _entry, new_source in usable:
+            diff = "".join(
+                difflib.unified_diff(
+                    current_source.splitlines(keepends=True),
+                    new_source.splitlines(keepends=True),
+                    fromfile="train.py (before)",
+                    tofile="train.py (after)",
+                    n=3,
+                )
+            )
+            proposals.append(
+                Proposal(
+                    new_source=new_source,
+                    diff=diff,
+                    tokens_in=per_in,
+                    tokens_out=per_out,
+                    usd=per_usd,
+                )
+            )
+        return proposals
