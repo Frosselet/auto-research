@@ -1,9 +1,14 @@
 """auto_research — enterprise-grade Karpathy autoresearch for quant analysts.
 
-Public API (MVP-1):
+Public API (MVP-1, local):
     onboard()        — interactive interview that emits spec.yaml + train.py + eval.py
     run_local(spec)  — execute the Karpathy loop locally against an OpenAI key
     results(spec)    — read the ledger, return the best trial and full history
+
+Public API (MVP-2, AWS — requires `pip install auto-research[aws]`):
+    submit(spec)     — upload inputs to S3, start a Step Functions execution, return Handle
+    aws_results(handle) — read the cloud ledger from DynamoDB
+    watch(handle)    — generator yielding round summaries until the execution finishes
 """
 from __future__ import annotations
 
@@ -18,7 +23,17 @@ from auto_research.spec import Spec
 from auto_research.store.local import LocalStore
 from auto_research.types import LoopState, Trial
 
-__all__ = ["onboard", "run_local", "results", "Spec", "Trial", "LoopState"]
+__all__ = [
+    "onboard",
+    "run_local",
+    "results",
+    "submit",
+    "aws_results",
+    "watch",
+    "Spec",
+    "Trial",
+    "LoopState",
+]
 
 
 def _workdir_for(spec: Spec, spec_path: Path) -> Path:
@@ -68,3 +83,29 @@ def results(spec_path: str | Path) -> dict:
         "kept": len(kept),
         "usd_spent": total_usd,
     }
+
+
+def submit(spec_path: str | Path, **kwargs):
+    """Submit a run to AWS (MVP-2). Requires `pip install auto-research[aws]`.
+
+    Uploads spec.yaml + train.py + eval.py + data file to S3, starts a Step Functions
+    execution, and returns a Handle. The execution runs asynchronously; use
+    `aws_results(handle)` and `watch(handle)` to follow it.
+    """
+    from auto_research_aws.submit import submit as _submit
+
+    return _submit(spec_path, **kwargs)
+
+
+def aws_results(handle, **kwargs) -> dict:
+    """Read the cloud ledger for a previously submitted run from DynamoDB."""
+    from auto_research_aws.submit import results as _aws_results
+
+    return _aws_results(handle, **kwargs)
+
+
+def watch(handle, **kwargs):
+    """Yield round summaries for a running cloud execution until it terminates."""
+    from auto_research_aws.submit import watch as _watch
+
+    return _watch(handle, **kwargs)

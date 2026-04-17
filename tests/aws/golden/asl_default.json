@@ -1,0 +1,67 @@
+{
+  "Comment": "auto-research parallel Karpathy loop",
+  "StartAt": "Propose",
+  "States": {
+    "Propose": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:eu-west-1:000000000000:function:auto-research-propose",
+      "Next": "MapTrials"
+    },
+    "MapTrials": {
+      "Type": "Map",
+      "ItemsPath": "$.proposals",
+      "MaxConcurrency": 10,
+      "ItemSelector": {
+        "run_id.$": "$$.Map.Item.Value.run_id",
+        "s3_bucket.$": "$$.Map.Item.Value.s3_bucket",
+        "ddb_table.$": "$$.Map.Item.Value.ddb_table",
+        "region.$": "$$.Map.Item.Value.region",
+        "openai_secret_id.$": "$$.Map.Item.Value.openai_secret_id",
+        "data_basename.$": "$$.Map.Item.Value.data_basename",
+        "round_id.$": "$$.Map.Item.Value.round_id",
+        "trial_id.$": "$$.Map.Item.Value.trial_id",
+        "idx.$": "$$.Map.Item.Value.idx",
+        "parent_id.$": "$$.Map.Item.Value.parent_id"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "Train",
+        "States": {
+          "Train": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:eu-west-1:000000000000:function:auto-research-train",
+            "Next": "Evaluate"
+          },
+          "Evaluate": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:eu-west-1:000000000000:function:auto-research-evaluate",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.map_results",
+      "Next": "Decide"
+    },
+    "Decide": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:eu-west-1:000000000000:function:auto-research-decide",
+      "Next": "ContinueChoice"
+    },
+    "ContinueChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.continue",
+          "BooleanEquals": true,
+          "Next": "Propose"
+        }
+      ],
+      "Default": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}

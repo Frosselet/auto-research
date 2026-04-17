@@ -234,12 +234,11 @@ class OpenAIProposer(Proposer):
         if not isinstance(raw, list) or len(raw) == 0:
             raise RuntimeError("proposer returned no proposals")
         # Tolerate fewer than k if the model couldn't produce K diverse edits, but never zero.
-        usable = []
+        usable: list[str] = []
         for entry in raw[:k]:
             new_source = (entry.get("new_source") or "").strip()
-            if not new_source:
-                continue
-            usable.append((entry, new_source))
+            if new_source:
+                usable.append(new_source)
         if not usable:
             raise RuntimeError("proposer returned only empty new_source entries")
 
@@ -257,7 +256,7 @@ class OpenAIProposer(Proposer):
         per_usd = usd_total / n
 
         proposals: list[Proposal] = []
-        for _entry, new_source in usable:
+        for new_source in usable:
             diff = "".join(
                 difflib.unified_diff(
                     current_source.splitlines(keepends=True),
